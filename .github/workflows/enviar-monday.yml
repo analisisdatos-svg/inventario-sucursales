@@ -1,43 +1,52 @@
 name: Enviar Inventario a Monday
- 
+
 on:
   repository_dispatch:
     types: [enviar-inventario]
- 
+
 jobs:
   enviar:
     runs-on: ubuntu-latest
- 
+
     steps:
       - name: Enviar productos a Monday
         env:
+          # IMPORTANTE: Ambas variables deben estar bajo el mismo 'env' del step
           MONDAY_API_KEY: ${{ secrets.MONDAY_API_KEY }}
+          PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: |
           python3 << 'EOF'
           import os
           import json
           import urllib.request
           import urllib.error
- 
-          API_KEY  = os.environ["MONDAY_API_KEY"]
-          payload  = json.loads(os.environ.get("PAYLOAD", "{}"))
+
+          API_KEY  = os.environ.get("MONDAY_API_KEY")
+          payload_str = os.environ.get("PAYLOAD", "{}")
+          payload  = json.loads(payload_str)
+          
           productos = payload.get("productos", [])
           board_id  = payload.get("board_id", 0)
- 
+
+          if not productos:
+              print("No se recibieron productos en el PAYLOAD.")
+              exit(0)
+
           headers = {
               "Content-Type": "application/json",
               "Authorization": API_KEY,
               "API-Version": "2024-01"
           }
- 
+
           errores = 0
           for p in productos:
+              # Construcción de valores de columna para Monday
               column_values = json.dumps({
                   p["col_proveedor"]: {"index": p["proveedor_index"]},
                   p["col_producto"]:  {"ids": [p["producto_id"]]},
                   p["col_inventario"]: str(p["inventario"])
               })
- 
+
               query = """
               mutation {
                 create_item (
@@ -46,8 +55,8 @@ jobs:
                   column_values: %s
                 ) { id }
               }
-              """ % (board_id, p["nombre"].replace('"', "'"), json.dumps(column_values))
- 
+              """ % (int(board_id), p["nombre"].replace('"', "'"), json.dumps(column_values))
+
               body = json.dumps({"query": query}).encode("utf-8")
               req  = urllib.request.Request(
                   "https://api.monday.com/v2",
@@ -55,7 +64,7 @@ jobs:
                   headers=headers,
                   method="POST"
               )
- 
+
               try:
                   with urllib.request.urlopen(req) as res:
                       data = json.loads(res.read())
@@ -67,8 +76,6 @@ jobs:
               except Exception as e:
                   print(f"EXCEPCION en {p['nombre']}: {e}")
                   errores += 1
- 
+
           print(f"\nResumen: {len(productos) - errores} enviados, {errores} errores.")
           EOF
-        env:
-          PAYLOAD: ${{ toJson(github.event.client_payload) }}
